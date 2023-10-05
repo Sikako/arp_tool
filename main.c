@@ -20,6 +20,7 @@
  * You have to use "enp2s0f5" when you ready to upload your homework.
  */
 #define DEVICE_NAME "ens33"
+#define BUFFER_SIZE 65535
 
 /*
  * You have to open two socket to handle this program.
@@ -33,21 +34,25 @@ int main(int argc, char **argv) {
 	struct sockaddr_ll sa;
 	struct ifreq req;
 	struct in_addr myip;
-	const char *optstring = "help";	// options -abc
+	const char *optstring = "l:q:";	// options -abc
 	int option;
 	
 	// 1. First Check if User Use Root Priviledge
 	check_root();
+
+	// 2. Check options
 	option = getopt(argc, argv, optstring);
 	switch (option)
 	{
-	case 'a':
-		printf("a\n");
-		break;
-	case 'b':
-		printf("b\n");
+	// -l listen mode
+	case 'l':
+		printf("l, optarg: %s, optind: %d\n", optarg, optind);
 		break;
 	
+	// -q query mode
+	case 'q':
+		printf("q, optarg: %s, optind: %d\n", optarg, optind);
+		break;
 	default:
 		printf("1) ./arp -l -a\n2) ./arp -l <filter_ip_address>\n3) ./arp -q <query_ip_address>\n4) ./arp <fake_mac_address> <target_ip_address>\n");
 		break;
@@ -55,7 +60,7 @@ int main(int argc, char **argv) {
 
 
 	// Open a recv socket in data-link layer.
-	if((sockfd_recv = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) < 0)
+	if((sockfd_recv = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) < 0)
 	{
 		perror("open recv socket error");
 		exit(1);
@@ -65,6 +70,23 @@ int main(int argc, char **argv) {
 	 * Use recvfrom function to get packet.
 	 * recvfrom( ... )
 	 */
+	char buffer[BUFFER_SIZE];
+	int data_size;
+	// bzero(buffer, sizeof(buffer));
+	struct sockaddr_in IP_from;
+	int fromlen = sizeof(IP_from);
+
+
+	while(data_size = recvfrom(sockfd_recv, buffer, sizeof(buffer), 0, (struct sockaddr *)&IP_from, (socklen_t *)&fromlen)){
+		printf("len%d\n", fromlen);
+		for(int i = 0; i < data_size; i++){
+        	printf("%02X ", buffer[i]);
+        	if (i % 15 == 0 && i != 0)
+            	printf("\n");
+    	}
+		printf("\n");
+		bzero(buffer, sizeof(buffer));
+	}
 
 
 
@@ -101,6 +123,7 @@ int main(int argc, char **argv) {
 	return 0;
 }
 
+// Function: Check if is executed with root priviledge
 void check_root(){
 	/* check if user execute with root */
 	if (geteuid() != 0){
