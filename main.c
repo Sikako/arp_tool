@@ -28,15 +28,31 @@
 
 void check_root();
 
-int main(void)
-{
+int main(int argc, char **argv) {
 	int sockfd_recv = 0, sockfd_send = 0;
 	struct sockaddr_ll sa;
 	struct ifreq req;
 	struct in_addr myip;
+	const char *optstring = "help";	// options -abc
+	int option;
 	
 	// 1. First Check if User Use Root Priviledge
 	check_root();
+	option = getopt(argc, argv, optstring);
+	switch (option)
+	{
+	case 'a':
+		printf("a\n");
+		break;
+	case 'b':
+		printf("b\n");
+		break;
+	
+	default:
+		printf("1) ./arp -l -a\n2) ./arp -l <filter_ip_address>\n3) ./arp -q <query_ip_address>\n4) ./arp <fake_mac_address> <target_ip_address>\n");
+		break;
+	}
+
 
 	// Open a recv socket in data-link layer.
 	if((sockfd_recv = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) < 0)
