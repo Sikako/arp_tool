@@ -29,7 +29,7 @@
  */
 
 void check_root();
-void listen_packets(int sockfd);
+void listen_packets(int sockfd, char *optarg);
 
 int main(int argc, char **argv) {
 	int sockfd_recv = 0, sockfd_send = 0;
@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
 	case 'l':
 		// printf("l, optarg: %s, optind: %d\n", optarg, optind);
 		printf("### ARP sniffer mode ###\n");
-		listen_packets(sockfd_recv);
+		listen_packets(sockfd_recv, optarg);
 		break;
 	
 	// -q query mode
@@ -130,7 +130,7 @@ void check_root(){
 
 
 // Function: Listen packets with recv()
-void listen_packets(int sockfd){
+void listen_packets(int sockfd, char *optarg){
 	int data_size;
 	u_int8_t buffer[BUFFER_SIZE];
 	char target_address[INET_ADDRSTRLEN], sender_address[INET_ADDRSTRLEN];
@@ -140,7 +140,8 @@ void listen_packets(int sockfd){
 		sprintf(target_address, "%d.%d.%d.%d", buffer[38], buffer[39], buffer[40], buffer[41]);
 		sprintf(sender_address, "%d.%d.%d.%d", buffer[28], buffer[29], buffer[30], buffer[31]);
 
-		printf("Get ARP packet - Who has %s?\tTell %s\n", target_address, sender_address);
+		if (strcmp(optarg, "-a") == 0 || strcmp(optarg, target_address) == 0)
+			printf("Get ARP packet - Who has %s?\t\t\tTell %s\n", target_address, sender_address);
 		// printf("%d", packet.arp.ea_hdr.ar_hrd);
 
 		// for(int i = 0; i < data_size; i++){
