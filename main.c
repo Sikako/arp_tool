@@ -6,6 +6,7 @@
 #include <netpacket/packet.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <arpa/inet.h>
 #include "arp.h"
 
 #include <stdio.h>
@@ -20,7 +21,7 @@
  * You have to use "enp2s0f5" when you ready to upload your homework.
  */
 #define DEVICE_NAME "ens33"
-#define BUFFER_SIZE 65535
+#define BUFFER_SIZE 61
 
 /*
  * You have to open two socket to handle this program.
@@ -28,36 +29,19 @@
  */
 
 void check_root();
+void listen_packets(int sockfd);
 
 int main(int argc, char **argv) {
 	int sockfd_recv = 0, sockfd_send = 0;
+
 	struct sockaddr_ll sa;
 	struct ifreq req;
 	struct in_addr myip;
-	const char *optstring = "l:q:";	// options -abc
+	const char *optstring = "hl:q";	// options -abc
 	int option;
 	
 	// 1. First Check if User Use Root Priviledge
 	check_root();
-
-	// 2. Check options
-	option = getopt(argc, argv, optstring);
-	switch (option)
-	{
-	// -l listen mode
-	case 'l':
-		printf("l, optarg: %s, optind: %d\n", optarg, optind);
-		break;
-	
-	// -q query mode
-	case 'q':
-		printf("q, optarg: %s, optind: %d\n", optarg, optind);
-		break;
-	default:
-		printf("1) ./arp -l -a\n2) ./arp -l <filter_ip_address>\n3) ./arp -q <query_ip_address>\n4) ./arp <fake_mac_address> <target_ip_address>\n");
-		break;
-	}
-
 
 	// Open a recv socket in data-link layer.
 	if((sockfd_recv = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) < 0)
@@ -66,37 +50,48 @@ int main(int argc, char **argv) {
 		exit(1);
 	}
 
-	/*
-	 * Use recvfrom function to get packet.
-	 * recvfrom( ... )
-	 */
-	char buffer[BUFFER_SIZE];
-	int data_size;
-	// bzero(buffer, sizeof(buffer));
-	struct sockaddr_in IP_from;
-	int fromlen = sizeof(IP_from);
-
-
-	while(data_size = recvfrom(sockfd_recv, buffer, sizeof(buffer), 0, (struct sockaddr *)&IP_from, (socklen_t *)&fromlen)){
-		printf("len%d\n", fromlen);
-		for(int i = 0; i < data_size; i++){
-        	printf("%02X ", buffer[i]);
-        	if (i % 15 == 0 && i != 0)
-            	printf("\n");
-    	}
-		printf("\n");
-		bzero(buffer, sizeof(buffer));
-	}
-
-
-
-	
 	// Open a send socket in data-link layer.
 	if((sockfd_send = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) < 0)
 	{
 		perror("open send socket error");
 		exit(sockfd_send);
 	}
+
+	// 2. Check options
+	option = getopt(argc, argv, optstring);
+
+	switch (option)
+	{
+	// -l listen mode
+	case 'l':
+		// printf("l, optarg: %s, optind: %d\n", optarg, optind);
+		printf("### ARP sniffer mode ###\n");
+		listen_packets(sockfd_recv);
+		break;
+	
+	// -q query mode
+	case 'q':
+		// printf("q, optarg: %s, optind: %d\n", optarg, optind);
+		printf("### ARP query mode ###\n");
+		// arp_pkt.arp = 
+		
+		break;
+
+	case 'h':
+		printf("Format :\n1) ./arp -l -a\n2) ./arp -l <filter_ip_address>\n3) ./arp -q <query_ip_address>\n4) ./arp <fake_mac_address> <target_ip_address>\n");
+		break;
+
+	default:
+		printf("Format :\n1) ./arp -l -a\n2) ./arp -l <filter_ip_address>\n3) ./arp -q <query_ip_address>\n4) ./arp <fake_mac_address> <target_ip_address>\n");
+		break;
+	}
+
+
+
+
+
+	
+
 	
 	/*
 	 * Use ioctl function binds the send socket and the Network Interface Card.
@@ -125,9 +120,39 @@ int main(int argc, char **argv) {
 
 // Function: Check if is executed with root priviledge
 void check_root(){
-	/* check if user execute with root */
 	if (geteuid() != 0){
 		printf("ERROR: You must be root to use this tool!");
 		exit(1);
+	}else{
+		printf("[ ARP sniffer and spoof program ]\n");
 	}
 }
+
+
+// Function: Listen packets with recv()
+void listen_packets(int sockfd){
+	int data_size;
+	u_int8_t buffer[BUFFER_SIZE];
+	char target_address[INET_ADDRSTRLEN], sender_address[INET_ADDRSTRLEN];
+	bzero(buffer, sizeof(buffer));
+
+	while(data_size = recv(sockfd, buffer, sizeof(buffer), 0)){
+		sprintf(target_address, "%d.%d.%d.%d", buffer[38], buffer[39], buffer[40], buffer[41]);
+		sprintf(sender_address, "%d.%d.%d.%d", buffer[28], buffer[29], buffer[30], buffer[31]);
+
+		printf("Get ARP packet - Who has %s?\tTell %s\n", target_address, sender_address);
+		// printf("%d", packet.arp.ea_hdr.ar_hrd);
+
+		// for(int i = 0; i < data_size; i++){
+		// 	printf("%02X ", buffer[i]);
+		// 	if ((i+1) % 16 == 0 && i != 0)
+		// 		printf("\n");
+		// }
+		// printf("\n");
+
+		// printf("192: %d\n",  buffer[44]);
+		bzero(buffer, sizeof(buffer));
+	}
+
+}
+
