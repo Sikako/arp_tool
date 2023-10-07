@@ -30,6 +30,7 @@
 
 void check_root();
 void listen_packets(int sockfd, char *optarg);
+void query_packets(int sockfd, char *optarg);
 
 int main(int argc, char **argv) {
 	int sockfd_recv = 0, sockfd_send = 0;
@@ -37,7 +38,7 @@ int main(int argc, char **argv) {
 	struct sockaddr_ll sa;
 	struct ifreq req;
 	struct in_addr myip;
-	const char *optstring = "hl:q";	// options -abc
+	const char *optstring = "hl:q:";	// options -abc
 	int option;
 	
 	// 1. First Check if User Use Root Priviledge
@@ -73,7 +74,7 @@ int main(int argc, char **argv) {
 	case 'q':
 		// printf("q, optarg: %s, optind: %d\n", optarg, optind);
 		printf("### ARP query mode ###\n");
-		// arp_pkt.arp = 
+		query_packets(sockfd_send, optarg);
 		
 		break;
 
@@ -86,35 +87,8 @@ int main(int argc, char **argv) {
 		break;
 	}
 
-
-
-
-
-	
-
-	
-	/*
-	 * Use ioctl function binds the send socket and the Network Interface Card.
-`	 * ioctl( ... )
-	 */
-	
-	
-
-	
 	// Fill the parameters of the sa.
-
-
-
 	
-	/*
-	 * use sendto function with sa variable to send your packet out
-	 * sendto( ... )
-	 */
-	
-	
-	
-
-
 	return 0;
 }
 
@@ -157,3 +131,41 @@ void listen_packets(int sockfd, char *optarg){
 
 }
 
+// Function: Query packets with send()
+void query_packets(int sockfd, char *optarg){
+	#define ETH2_HEADER_LEN 14
+	// 獲取網卡等需要的信息，定義在if.h中，配合ioctl()一起使用
+	u_int8_t buffer[BUFFER_SIZE];
+	struct ifreq ifr;
+	struct ethhdr *send_pkt = (struct ethhdr *) buffer;
+	struct ether_arp *arp_req = (struct ether_arp *) (buffer + ETH2_HEADER_LEN); // arp 封包 位移6+6+2
+	
+	char target_address[INET_ADDRSTRLEN];
+	memcpy(target_address, optarg, INET_ADDRSTRLEN);
+	printf("目標地址：%s\n", target_address);
+
+	// 化取網卡名
+	memcpy(ifr.ifr_name, DEVICE_NAME, IF_NAMESIZE);
+	char ifrname[IF_NAMESIZE];
+	memcpy(ifrname, ifr.ifr_name, IF_NAMESIZE);
+	printf("網卡名：%s\n", ifrname);
+
+	// 獲取網卡索引
+	if(ioctl(sockfd, SIOCGIFINDEX, &ifr) == -1){
+		perror("SIOCGIFINDEX");
+		exit(-1);
+	}
+	int ifrindex = ifr.ifr_ifindex;
+	printf("網卡索引為：%d\n", ifrindex);
+
+	// 獲取網卡MAC
+	if(ioctl(sockfd, SIOCGIFHWADDR, &ifr) == -1){
+		perror("SIOCGIFHWADDR");
+		exit(-1);
+	}
+	
+	
+
+
+
+}
