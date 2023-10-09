@@ -6,6 +6,8 @@
 #include <netpacket/packet.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_arp.h>
+#include <net/if_packet.h>
 #include <arpa/inet.h>
 #include "arp.h"
 
@@ -22,6 +24,13 @@
  */
 #define DEVICE_NAME "ens33"
 #define BUFFER_SIZE 512
+#define ETH2_HEADER_LEN 14
+#define MAC_LENGTH 6
+#define IPV4_LENGTH 4
+#define HW_TYPE 1
+#define ARP_REQUEST 0x01
+#define ARP_REPLY 0x02
+#define ARP_SIZE 42
 
 // print detail 
 #define DEBUG_MODE 1
@@ -33,16 +42,13 @@
 
 void check_root();
 void listen_mode(char *optarg);
-void query_mode(int sockfd, char *optarg);
+void query_mode(char *optarg);
 int int_ip4(struct sockaddr *addr, uint32_t *ip);
 int get_if_ip4(int sockfd, uint32_t *ip);
-int get_if_info(int sockfd, int *ifindex, uint8_t *mac, uint32_t *ip);
+int get_if_info(int *ifindex, uint8_t *mac, uint32_t *ip);
+int bind_sockfd(int ifindex, int *sockfd);
 
 int main(int argc, char **argv) {
-	int sockfd_recv = 0, sockfd_send = 0;
-
-	struct sockaddr_ll sa;
-	struct ifreq req;
 	struct in_addr myip;
 	const char *optstring = "hl:q:";	// options -abc
 	int option;
@@ -50,12 +56,6 @@ int main(int argc, char **argv) {
 	// 1. First Check if User Use Root Priviledge
 	check_root();
 
-	// Open a send socket in data-link layer.
-	if((sockfd_send = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) < 0)
-	{
-		perror("open send socket error");
-		exit(sockfd_send);
-	}
 
 	// 2. Check options
 	option = getopt(argc, argv, optstring);
@@ -73,7 +73,7 @@ int main(int argc, char **argv) {
 	case 'q':
 		// printf("q, optarg: %s, optind: %d\n", optarg, optind);
 		printf("### ARP query mode ###\n");
-		query_mode(sockfd_send, optarg);
+		query_mode(optarg);
 		
 		break;
 
@@ -139,41 +139,104 @@ void listen_mode(char *optarg){
 }
 
 // Function: Query packets with send()
-void query_mode(int sockfd, char *optarg){
-	#define ETH2_HEADER_LEN 14
-	#define MAC_LENGTH 6
+void query_mode(char *optarg){
 	// 獲取網卡等需要的信息，定義在if.h中，配合ioctl()一起使用
-	u_int8_t buffer[BUFFER_SIZE];
 	int ifindex;
 	uint8_t mac[MAC_LENGTH];
-	int src;
+	uint32_t src;
 	uint32_t dst = inet_addr(optarg);
-
-	struct ifreq ifr;
-	struct ethhdr *send_pkt = (struct ethhdr *) buffer;
-	struct ether_arp *arp_req = (struct ether_arp *) (buffer + ETH2_HEADER_LEN); // arp 封包 位移6+6+2
 	
 	char *target_address = optarg;
 	printf("目標地址：%s\n", target_address);
 
-	if(get_if_info(sockfd, &ifindex, mac, &src)){
+	// 取得網卡資訊
+	if(get_if_info(&ifindex, mac, &src)){
 		perror("get_if_info");
 		exit(-1);
 	}
 
-	
-	// build a struct arp packet
+	// bind sockfd with if
+	int sockfd_send;
+	if(bind_sockfd(ifindex, &sockfd_send)){
+		perror("bind_sockfd");
+		exit(-1);
+	}
+
+
+
+
+}
+
+int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip){
+	u_int8_t buffer[BUFFER_SIZE];
+	struct ethhdr *send_pkt = (struct ethhdr *) buffer;
+	struct ether_arp *arp_req = (struct ether_arp *) (buffer + ETH2_HEADER_LEN); // arp 封包 位移6+6+2
+	struct sockaddr_ll sa;
+	sa.sll_family = AF_PACKET;
+	sa.sll_protocol = htons(ETH_P_AARP);
+	sa.sll_ifindex = ifindex;
+	sa.sll_hatype = htons(ARPHRD_ETHER);
+
+	ssize_t ret;
 
 	// Broadcast
 	memset(send_pkt->h_dest, 0xff, MAC_LENGTH);
-	// memset(send_pkt->h_source, )
+	
+	//Target MAC zero
+    memset(arp_req->target_mac, 0x00, MAC_LENGTH);
+
+	//Set source mac to our MAC address
+    memcpy(send_pkt->h_source, src_mac, MAC_LENGTH);
+    memcpy(arp_req->sender_mac, src_mac, MAC_LENGTH);
+    memcpy(sa.sll_addr, src_mac, MAC_LENGTH);
+
+    /* Setting protocol of the packet */
+    send_pkt->h_proto = htons(ETH_P_ARP);
+
+	/* Creating ARP request */
+    arp_req->hardware_type = htons(HW_TYPE);
+    arp_req->protocol_type = htons(ETH_P_IP);
+    arp_req->hardware_len = MAC_LENGTH;
+    arp_req->protocol_len = IPV4_LENGTH;
+    arp_req->opcode = htons(ARP_REQUEST);
+
+	memcpy(arp_req->sender_ip, &src_ip, sizeof(uint32_t));
+    memcpy(arp_req->target_ip, &dst_ip, sizeof(uint32_t));
+
+	ret = sendto(sockfd, buffer, ARP_SIZE, 0, (strct sockaddr *)&sa, sizeof(sa));
+	if(ret == -1){
+		perror("sendto");
+		exit(-1);
+	}
+	return 0;
+
+}
+
+int bind_sockfd(int ifindex, int *sockfd){
+	if((*sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) < 0){
+		perror("open send socket error");
+		exit(1);
+	}
+
+	struct sockaddr_ll sa;
+	sa.sll_family = AF_PACKET;
+	sa.sll_protocol = htons(ETH_P_ARP);
+	sa.sll_ifindex = ifindex;
+	sa.sll_hatype = htons(ARPHRD_ETHER);
+	sa.sll_halen = ETH_ALEN;
+
+	if(bind(*sockfd, (struct sockaddr *)&sa, sizeof(struct sockaddr_ll)) < 0){
+		perror("bind");
+		return 1;
+	}
 
 }
 
 // 取得if資訊
-int get_if_info(int sockfd, int *ifindex, uint8_t *mac, uint32_t *src){
+int get_if_info(int *ifindex, uint8_t *mac, uint32_t *src){
 	struct ifreq ifr;
-		
+	int sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
+
 	// 取網卡名
 	memcpy(ifr.ifr_name, DEVICE_NAME, IF_NAMESIZE);
 
