@@ -30,7 +30,7 @@
 #define HW_TYPE 1
 #define ARP_REQUEST 0x01
 #define ARP_REPLY 0x02
-#define ARP_SIZE 42
+#define ARP_SIZE 42 // ether header 14 + arp 28
 
 // print detail 
 #define DEBUG_MODE 1
@@ -46,6 +46,7 @@ void query_mode(char *optarg);
 int int_ip4(struct sockaddr *addr, uint32_t *ip);
 int get_if_ip4(int sockfd, uint32_t *ip);
 int get_if_info(int *ifindex, uint8_t *mac, uint32_t *ip);
+int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip);
 int bind_sockfd(int ifindex, int *sockfd);
 
 int main(int argc, char **argv) {
@@ -142,15 +143,15 @@ void listen_mode(char *optarg){
 void query_mode(char *optarg){
 	// 獲取網卡等需要的信息，定義在if.h中，配合ioctl()一起使用
 	int ifindex;
-	uint8_t mac[MAC_LENGTH];
-	uint32_t src;
-	uint32_t dst = inet_addr(optarg);
+	uint8_t src_mac[MAC_LENGTH];
+	uint32_t src_ip;
+	uint32_t dst_ip = inet_addr(optarg);
 	
 	char *target_address = optarg;
 	printf("目標地址：%s\n", target_address);
 
 	// 取得網卡資訊
-	if(get_if_info(&ifindex, mac, &src)){
+	if(get_if_info(&ifindex, src_mac, &src_ip)){
 		perror("get_if_info");
 		exit(-1);
 	}
@@ -162,6 +163,10 @@ void query_mode(char *optarg){
 		exit(-1);
 	}
 
+	if(send_arp(sockfd_send, ifindex, src_mac, src_ip, dst_ip)){
+		perror("send_arp");
+		exit(-1);
+	}
 
 
 
@@ -169,44 +174,47 @@ void query_mode(char *optarg){
 
 int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip){
 	u_int8_t buffer[BUFFER_SIZE];
+	bzero(buffer, sizeof(buffer));
 	struct ethhdr *send_pkt = (struct ethhdr *) buffer;
 	struct ether_arp *arp_req = (struct ether_arp *) (buffer + ETH2_HEADER_LEN); // arp 封包 位移6+6+2
 	struct sockaddr_ll sa;
 	sa.sll_family = AF_PACKET;
-	sa.sll_protocol = htons(ETH_P_AARP);
+	sa.sll_protocol = htons(ETH_P_ARP);
 	sa.sll_ifindex = ifindex;
 	sa.sll_hatype = htons(ARPHRD_ETHER);
-
-	ssize_t ret;
-
+	sa.sll_halen = ETH_ALEN;
 	// Broadcast
 	memset(send_pkt->h_dest, 0xff, MAC_LENGTH);
 	
 	//Target MAC zero
-    memset(arp_req->target_mac, 0x00, MAC_LENGTH);
+    memset(arp_req->arp_tha, 0x00, MAC_LENGTH);
 
 	//Set source mac to our MAC address
     memcpy(send_pkt->h_source, src_mac, MAC_LENGTH);
-    memcpy(arp_req->sender_mac, src_mac, MAC_LENGTH);
+    memcpy(arp_req->arp_sha, src_mac, MAC_LENGTH);
     memcpy(sa.sll_addr, src_mac, MAC_LENGTH);
 
     /* Setting protocol of the packet */
     send_pkt->h_proto = htons(ETH_P_ARP);
 
 	/* Creating ARP request */
-    arp_req->hardware_type = htons(HW_TYPE);
-    arp_req->protocol_type = htons(ETH_P_IP);
-    arp_req->hardware_len = MAC_LENGTH;
-    arp_req->protocol_len = IPV4_LENGTH;
-    arp_req->opcode = htons(ARP_REQUEST);
+    arp_req->ea_hdr.ar_hrd = htons(HW_TYPE);
+    arp_req->ea_hdr.ar_pro = htons(ETH_P_IP);
+    arp_req->ea_hdr.ar_hln = MAC_LENGTH;
+    arp_req->ea_hdr.ar_pln = IPV4_LENGTH;
+    arp_req->ea_hdr.ar_op = htons(ARP_REQUEST);
 
-	memcpy(arp_req->sender_ip, &src_ip, sizeof(uint32_t));
-    memcpy(arp_req->target_ip, &dst_ip, sizeof(uint32_t));
+	memcpy(arp_req->arp_spa, &src_ip, sizeof(uint32_t));
+    memcpy(arp_req->arp_tpa, &dst_ip, sizeof(uint32_t));
 
-	ret = sendto(sockfd, buffer, ARP_SIZE, 0, (strct sockaddr *)&sa, sizeof(sa));
-	if(ret == -1){
+	if(sendto(sockfd, buffer, 60, 0, (struct sockaddr *)&sa, sizeof(sa))){
 		perror("sendto");
 		exit(-1);
+	}
+	for(int i=0; i<60; i++){
+		printf("%02X ", buffer[i]);
+		if ((i+1) % 16 == 0 && i != 0)
+			printf("\n");
 	}
 	return 0;
 
