@@ -47,6 +47,7 @@ int int_ip4(struct sockaddr *addr, uint32_t *ip);
 int get_if_ip4(int sockfd, uint32_t *ip);
 int get_if_info(int *ifindex, uint8_t *mac, uint32_t *ip);
 int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip);
+int recv_arp(int sockfd,  uint8_t *target_mac_str);
 int bind_sockfd(int ifindex, int *sockfd);
 
 int main(int argc, char **argv) {
@@ -105,7 +106,7 @@ void check_root(){
 
 // Function: Listen packets with recv()
 void listen_mode(char *optarg){
-	int data_size;
+	ssize_t data_size;
 	u_int8_t buffer[BUFFER_SIZE];
 	char target_address[INET_ADDRSTRLEN], sender_address[INET_ADDRSTRLEN];
 	bzero(buffer, sizeof(buffer));
@@ -118,7 +119,7 @@ void listen_mode(char *optarg){
 		exit(1);
 	}
 
-	while(data_size = recv(sockfd_recv, buffer, sizeof(buffer), 0)){
+	while(data_size = recvfrom(sockfd_recv, buffer, sizeof(buffer), 0, NULL, NULL)){
 		sprintf(target_address, "%d.%d.%d.%d", buffer[38], buffer[39], buffer[40], buffer[41]);
 		sprintf(sender_address, "%d.%d.%d.%d", buffer[28], buffer[29], buffer[30], buffer[31]);
 
@@ -144,6 +145,7 @@ void query_mode(char *optarg){
 	// 獲取網卡等需要的信息，定義在if.h中，配合ioctl()一起使用
 	int ifindex;
 	uint8_t src_mac[MAC_LENGTH];
+	uint8_t tgt_mac_str[18];
 	uint32_t src_ip;
 	uint32_t dst_ip = inet_addr(optarg);
 	
@@ -168,10 +170,61 @@ void query_mode(char *optarg){
 		exit(-1);
 	}
 
-
+	while(1) {
+        int r = recv_arp(sockfd_send, tgt_mac_str);
+        if (r == 0) {
+            printf("目標MAC地址%s\n", tgt_mac_str);
+            break;
+        }
+    }
 
 }
 
+int recv_arp(int sockfd, uint8_t *target_mac_str){
+	u_int8_t buffer[BUFFER_SIZE];
+	bzero(buffer, sizeof(buffer));
+	ssize_t data_size;
+	uint8_t tgt_mac[MAC_LENGTH];
+	if((data_size = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL)) <= 0){
+		perror("recvfrom");
+		exit(-1);
+	}
+
+	struct ethhdr *rcv_pkt = (struct ethhdr *) buffer;
+	struct ether_arp *arp_rply = (struct ether_arp *) (buffer + ETH2_HEADER_LEN);
+	if(ntohs(rcv_pkt->h_proto) != ETH_P_ARP){
+		perror("Not an ARP reply");
+		exit(-1);
+	}
+
+	if(ntohs(arp_rply->ea_hdr.ar_op) != ARP_REPLY){
+		perror("Not an ARP reply");
+		exit(-1);
+	}
+
+	memcpy(tgt_mac, arp_rply->arp_tha, MAC_LENGTH);
+	sprintf(target_mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", tgt_mac[0], tgt_mac[1], tgt_mac[2], tgt_mac[3], tgt_mac[4], tgt_mac[5]);
+
+
+
+
+
+	if(DEBUG_MODE){
+		// printf("reply封包大小:%ld\n", data_size);
+		printf("Reply 封包:\n");
+		for(int i=0; i<60; i++){
+			printf("%02X ", buffer[i]);
+			if ((i+1) % 16 == 0 && i != 0)
+				printf("\n");
+		}
+		printf("\n");
+	}
+
+	
+	return 0;
+}
+
+// send arp packet
 int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip){
 	u_int8_t buffer[BUFFER_SIZE];
 	bzero(buffer, sizeof(buffer));
@@ -207,19 +260,23 @@ int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_
 	memcpy(arp_req->arp_spa, &src_ip, sizeof(uint32_t));
     memcpy(arp_req->arp_tpa, &dst_ip, sizeof(uint32_t));
 
-	if(sendto(sockfd, buffer, 60, 0, (struct sockaddr *)&sa, sizeof(sa))){
+	if(sendto(sockfd, buffer, 60, 0, (struct sockaddr *)&sa, sizeof(sa)) == -1){
 		perror("sendto");
 		exit(-1);
 	}
+
+	printf("Request 封包:\n");
 	for(int i=0; i<60; i++){
 		printf("%02X ", buffer[i]);
 		if ((i+1) % 16 == 0 && i != 0)
 			printf("\n");
 	}
+	printf("\n");
 	return 0;
 
 }
 
+// 綁定sock --- if
 int bind_sockfd(int ifindex, int *sockfd){
 	if((*sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) < 0){
 		perror("open send socket error");
