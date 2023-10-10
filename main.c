@@ -118,6 +118,8 @@ void listen_mode(char *optarg){
 		perror("open recv socket error");
 		exit(1);
 	}
+	
+	
 
 	while(data_size = recvfrom(sockfd_recv, buffer, sizeof(buffer), 0, NULL, NULL)){
 		sprintf(target_address, "%d.%d.%d.%d", buffer[38], buffer[39], buffer[40], buffer[41]);
@@ -173,7 +175,7 @@ void query_mode(char *optarg){
 	while(1) {
         int r = recv_arp(sockfd_send, tgt_mac_str);
         if (r == 0) {
-            printf("目標MAC地址%s\n", tgt_mac_str);
+            printf("Mac address of %s is %s\n", target_address, tgt_mac_str);
             break;
         }
     }
@@ -202,7 +204,7 @@ int recv_arp(int sockfd, uint8_t *target_mac_str){
 		exit(-1);
 	}
 
-	memcpy(tgt_mac, arp_rply->arp_tha, MAC_LENGTH);
+	memcpy(tgt_mac, arp_rply->arp_sha, MAC_LENGTH);
 	sprintf(target_mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", tgt_mac[0], tgt_mac[1], tgt_mac[2], tgt_mac[3], tgt_mac[4], tgt_mac[5]);
 
 
