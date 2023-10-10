@@ -40,24 +40,54 @@
  * One for input , the other for output.
  */
 
+void get_usage();
 void check_root();
-void listen_mode(char *optarg);
-void query_mode(char *optarg);
+void listen_mode(char *optarg, int sockfd, uint8_t *buffer, int ifindex, uint8_t *src_mac, uint32_t *src_ip);
+void query_mode(char *optarg, int sockfd, uint8_t *buffer, int ifindex, uint8_t *src_mac, uint32_t *src_ip);
+void spoof_mode(char **argv, int sockfd, uint8_t *buffer, int ifindex, uint8_t *src_mac, uint32_t *src_ip);
+int get_if_info(int *ifindex, uint8_t *mac, uint32_t *ip);
+int bind_sockfd(int ifindex, int *sockfd);
+int send_arp_request(int sockfd, uint8_t *buffer, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip);
+int recv_arp_reply(int sockfd, uint8_t *buffer, uint8_t *target_mac_str);
+int is_target_ip(uint8_t *buffer,  char *tgt_ip_addr);
+int send_spoofing_packet(int sockfd, uint8_t *buffer);
 int int_ip4(struct sockaddr *addr, uint32_t *ip);
 int get_if_ip4(int sockfd, uint32_t *ip);
-int get_if_info(int *ifindex, uint8_t *mac, uint32_t *ip);
-int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip);
-int recv_arp(int sockfd,  uint8_t *target_mac_str);
-int bind_sockfd(int ifindex, int *sockfd);
+int format_ip4(struct sockaddr *addr, char *out);
+void print_buffer(uint8_t *buffer);
+
+
 
 int main(int argc, char **argv) {
 	struct in_addr myip;
 	const char *optstring = "hl:q:";	// options -abc
 	int option;
+	int sockfd;
+	int ifindex;
+	uint8_t src_mac[MAC_LENGTH];
+	uint32_t src_ip;
+	u_int8_t buffer[BUFFER_SIZE];
 	
 	// 1. First Check if User Use Root Priviledge
 	check_root();
 
+
+	if(argc < 2){
+		get_usage();
+		return 1;
+	}
+
+	// 取得網卡資訊
+	if(get_if_info(&ifindex, src_mac, &src_ip)){
+		perror("get_if_info");
+		exit(-1);
+	}
+
+	// bind sockfd with interface
+	if(bind_sockfd(ifindex, &sockfd)){
+		perror("bind_sockfd");
+		exit(-1);
+	}
 
 	// 2. Check options
 	option = getopt(argc, argv, optstring);
@@ -68,29 +98,38 @@ int main(int argc, char **argv) {
 	case 'l':
 		// printf("l, optarg: %s, optind: %d\n", optarg, optind);
 		printf("### ARP sniffer mode ###\n");
-		listen_mode(optarg);
+		listen_mode(optarg, sockfd, buffer, ifindex, src_mac, &src_ip);
 		break;
 	
 	// -q query mode
 	case 'q':
 		// printf("q, optarg: %s, optind: %d\n", optarg, optind);
 		printf("### ARP query mode ###\n");
-		query_mode(optarg);
-		
+		query_mode(optarg, sockfd, buffer, ifindex, src_mac, &src_ip);
 		break;
 
 	case 'h':
-		printf("Format :\n1) ./arp -l -a\n2) ./arp -l <filter_ip_address>\n3) ./arp -q <query_ip_address>\n4) ./arp <fake_mac_address> <target_ip_address>\n");
+		get_usage();
 		break;
 
 	default:
-		printf("Format :\n1) ./arp -l -a\n2) ./arp -l <filter_ip_address>\n3) ./arp -q <query_ip_address>\n4) ./arp <fake_mac_address> <target_ip_address>\n");
+		if(argc == 3){
+			printf("### ARP spoof mode ###\n");
+			spoof_mode(argv, sockfd, buffer, ifindex, src_mac, &src_ip);
+			break;
+		}
+		get_usage();
 		break;
 	}
 
 	// Fill the parameters of the sa.
 	
 	return 0;
+}
+
+// Get useage
+void get_usage(){
+	printf("Format :\n1) ./arp -l -a\n2) ./arp -l <filter_ip_address>\n3) ./arp -q <query_ip_address>\n4) ./arp <fake_mac_address> <target_ip_address>\n");
 }
 
 // Function: Check if is executed with root priviledge
@@ -105,23 +144,12 @@ void check_root(){
 
 
 // Function: Listen packets with recv()
-void listen_mode(char *optarg){
+void listen_mode(char *optarg, int sockfd, uint8_t *buffer, int ifindex, uint8_t *src_mac, uint32_t *src_ip){
 	ssize_t data_size;
-	u_int8_t buffer[BUFFER_SIZE];
 	char target_address[INET_ADDRSTRLEN], sender_address[INET_ADDRSTRLEN];
-	bzero(buffer, sizeof(buffer));
-	int sockfd_recv;
+	bzero(buffer, BUFFER_SIZE);
 
-	// Open a recv socket in data-link layer.
-	if((sockfd_recv = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) < 0)
-	{
-		perror("open recv socket error");
-		exit(1);
-	}
-	
-	
-
-	while(data_size = recvfrom(sockfd_recv, buffer, sizeof(buffer), 0, NULL, NULL)){
+	while(data_size = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, NULL, NULL)){
 		sprintf(target_address, "%d.%d.%d.%d", buffer[38], buffer[39], buffer[40], buffer[41]);
 		sprintf(sender_address, "%d.%d.%d.%d", buffer[28], buffer[29], buffer[30], buffer[31]);
 
@@ -137,43 +165,27 @@ void listen_mode(char *optarg){
 		// printf("\n");
 
 		// printf("192: %d\n",  buffer[44]);
-		bzero(buffer, sizeof(buffer));
+		bzero(buffer, BUFFER_SIZE);
 	}
 
 }
 
 // Function: Query packets with send()
-void query_mode(char *optarg){
+void query_mode(char *optarg, int sockfd, uint8_t *buffer, int ifindex, uint8_t *src_mac, uint32_t *src_ip){
 	// 獲取網卡等需要的信息，定義在if.h中，配合ioctl()一起使用
-	int ifindex;
-	uint8_t src_mac[MAC_LENGTH];
 	uint8_t tgt_mac_str[18];
-	uint32_t src_ip;
 	uint32_t dst_ip = inet_addr(optarg);
-	
+	bzero(buffer, BUFFER_SIZE);
 	char *target_address = optarg;
-	printf("目標地址：%s\n", target_address);
+	// printf("目標地址：%s\n", target_address);
 
-	// 取得網卡資訊
-	if(get_if_info(&ifindex, src_mac, &src_ip)){
-		perror("get_if_info");
-		exit(-1);
-	}
-
-	// bind sockfd with if
-	int sockfd_send;
-	if(bind_sockfd(ifindex, &sockfd_send)){
-		perror("bind_sockfd");
-		exit(-1);
-	}
-
-	if(send_arp(sockfd_send, ifindex, src_mac, src_ip, dst_ip)){
-		perror("send_arp");
+	if(send_arp_request(sockfd, buffer, ifindex, src_mac, *src_ip, dst_ip)){
+		perror("send_arp_request");
 		exit(-1);
 	}
 
 	while(1) {
-        int r = recv_arp(sockfd_send, tgt_mac_str);
+        int r = recv_arp_reply(sockfd, buffer, tgt_mac_str);
         if (r == 0) {
             printf("Mac address of %s is %s\n", target_address, tgt_mac_str);
             break;
@@ -182,16 +194,40 @@ void query_mode(char *optarg){
 
 }
 
-int recv_arp(int sockfd, uint8_t *target_mac_str){
-	u_int8_t buffer[BUFFER_SIZE];
-	bzero(buffer, sizeof(buffer));
+// Function: Spoof mode
+void spoof_mode(char **argv, int sockfd, uint8_t *buffer, int ifindex, uint8_t *src_mac, uint32_t *src_ip){
+	char *fake_mac_addr = argv[1];
+	char *tgt_ip_addr = argv[2];
+	bzero(buffer, BUFFER_SIZE);
+	ssize_t data_size;
+
+	if(DEBUG_MODE){
+		printf("fake mac address: %s\n", fake_mac_addr);
+		printf("target ip address: %s\n", tgt_ip_addr);
+	}
+
+	while(data_size = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, NULL, NULL)){
+		// printf("%d\n", 12 == 12);
+		if(is_target_ip(buffer, tgt_ip_addr))
+			printf("yes\n");
+		else
+			printf("no\n");
+			// send_spoofing_packet(sockfd, buffer);
+	}
+
+
+}
+
+
+
+int recv_arp_reply(int sockfd, uint8_t *buffer, uint8_t *target_mac_str){
+	bzero(buffer, BUFFER_SIZE);
 	ssize_t data_size;
 	uint8_t tgt_mac[MAC_LENGTH];
-	if((data_size = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL)) <= 0){
+	if((data_size = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, NULL, NULL)) <= 0){
 		perror("recvfrom");
 		exit(-1);
 	}
-
 	struct ethhdr *rcv_pkt = (struct ethhdr *) buffer;
 	struct ether_arp *arp_rply = (struct ether_arp *) (buffer + ETH2_HEADER_LEN);
 	if(ntohs(rcv_pkt->h_proto) != ETH_P_ARP){
@@ -214,12 +250,7 @@ int recv_arp(int sockfd, uint8_t *target_mac_str){
 	if(DEBUG_MODE){
 		// printf("reply封包大小:%ld\n", data_size);
 		printf("Reply 封包:\n");
-		for(int i=0; i<60; i++){
-			printf("%02X ", buffer[i]);
-			if ((i+1) % 16 == 0 && i != 0)
-				printf("\n");
-		}
-		printf("\n");
+		print_buffer(buffer);
 	}
 
 	
@@ -227,9 +258,8 @@ int recv_arp(int sockfd, uint8_t *target_mac_str){
 }
 
 // send arp packet
-int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip){
-	u_int8_t buffer[BUFFER_SIZE];
-	bzero(buffer, sizeof(buffer));
+int send_arp_request(int sockfd, uint8_t *buffer, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_t dst_ip){
+	bzero(buffer, BUFFER_SIZE);
 	struct ethhdr *send_pkt = (struct ethhdr *) buffer;
 	struct ether_arp *arp_req = (struct ether_arp *) (buffer + ETH2_HEADER_LEN); // arp 封包 位移6+6+2
 	struct sockaddr_ll sa;
@@ -262,19 +292,32 @@ int send_arp(int sockfd, int ifindex, uint8_t *src_mac, uint32_t src_ip, uint32_
 	memcpy(arp_req->arp_spa, &src_ip, sizeof(uint32_t));
     memcpy(arp_req->arp_tpa, &dst_ip, sizeof(uint32_t));
 
-	if(sendto(sockfd, buffer, 60, 0, (struct sockaddr *)&sa, sizeof(sa)) == -1){
+	if(sendto(sockfd, buffer, 42, 0, (struct sockaddr *)&sa, sizeof(sa)) == -1){
 		perror("sendto");
 		exit(-1);
 	}
 
 	printf("Request 封包:\n");
-	for(int i=0; i<60; i++){
-		printf("%02X ", buffer[i]);
-		if ((i+1) % 16 == 0 && i != 0)
-			printf("\n");
-	}
-	printf("\n");
+	print_buffer(buffer);
 	return 0;
+
+}
+
+// 判斷是否buffer是目標ip
+int is_target_ip(uint8_t *buffer,  char *tgt_ip_addr){
+	struct ethhdr *send_pkt = (struct ethhdr *) buffer;
+	struct ether_arp *arp_req = (struct ether_arp *) (buffer + ETH2_HEADER_LEN); // arp 封包 位移6+6+2
+	char chk_ip[INET_ADDRSTRLEN];
+	sprintf(chk_ip, "%d.%d.%d.%d", arp_req->arp_tpa[0], arp_req->arp_tpa[1], arp_req->arp_tpa[2], arp_req->arp_tpa[3]);
+	printf("%s\n", chk_ip);
+	
+	if(strcmp(chk_ip, tgt_ip_addr) == 0)
+		return 1;
+	else
+		return 0;
+}
+
+int send_spoofing_packet(int sockfd, uint8_t *buffer){
 
 }
 
@@ -289,8 +332,8 @@ int bind_sockfd(int ifindex, int *sockfd){
 	sa.sll_family = AF_PACKET;
 	sa.sll_protocol = htons(ETH_P_ARP);
 	sa.sll_ifindex = ifindex;
-	sa.sll_hatype = htons(ARPHRD_ETHER);
-	sa.sll_halen = ETH_ALEN;
+	// sa.sll_hatype = htons(ARPHRD_ETHER);
+	// sa.sll_halen = ETH_ALEN;
 
 	if(bind(*sockfd, (struct sockaddr *)&sa, sizeof(struct sockaddr_ll)) < 0){
 		perror("bind");
@@ -340,6 +383,7 @@ int get_if_info(int *ifindex, uint8_t *mac, uint32_t *src){
 	return 0;
 }
 
+// 從interface中取得ip address
 int get_if_ip4(int sockfd, uint32_t *ip){
 	struct ifreq ifr;
 
@@ -392,4 +436,13 @@ int format_ip4(struct sockaddr *addr, char *out)
     } else {
         return -1;
     }
+}
+
+void print_buffer(uint8_t *buffer){
+	for(int i=0; i<60; i++){
+		printf("%02X ", buffer[i]);
+		if ((i+1) % 16 == 0 && i != 0)
+			printf("\n");
+	}
+	printf("\n");
 }
