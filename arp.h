@@ -9,7 +9,6 @@ struct arp_packet
 	struct ether_arp arp;
 };
 
-void print_usage();
 
 
 void set_hard_type(struct ether_arp *packet, unsigned short int type);
