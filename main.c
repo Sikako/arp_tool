@@ -62,7 +62,6 @@ int is_target_ip(u_int8_t *buffer,  char *tgt_ip_addr, char *sender_ip_addr, u_i
 
 
 int main(int argc, char **argv) {
-	struct in_addr myip;
 	const char *optstring = "hl:q:";	// options -abc
 	int option;
 	int sockfd;
@@ -145,15 +144,6 @@ void listen_mode(char *optarg, int sockfd, u_int8_t *buffer, int ifindex, u_int8
 		if (strcmp(optarg, "-a") == 0 || strcmp(optarg, target_address) == 0)
 			printf("Get ARP packet - Who has %s?\t\t\tTell %s\n", target_address, sender_address);
 		// printf("%d", packet.arp.ea_hdr.ar_hrd);
-
-		// for(int i = 0; i < data_size; i++){
-		// 	printf("%02X ", buffer[i]);
-		// 	if ((i+1) % 16 == 0 && i != 0)
-		// 		printf("\n");
-		// }
-		// printf("\n");
-
-		// printf("192: %d\n",  buffer[44]);
 		bzero(buffer, BUFFER_SIZE);
 	}
 
@@ -202,7 +192,6 @@ void spoof_mode(char **argv, int sockfd, u_int8_t *buffer, int ifindex){
 	mac_str_to_uint8(fake_mac_addr, src_mac);
 
 	while(data_size = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, NULL, NULL)){
-		// printf("%d\n", 12 == 12);
 		if(is_target_ip(buffer, tgt_ip_addr, sender_ip_addr, dst_mac, &dst_ip)){
 			// printf("dst_ip: %d\n", dst_ip);
 			printf("Get ARP packet - Who has %s ? \t\t tell %s\n", tgt_ip_addr, sender_ip_addr);
